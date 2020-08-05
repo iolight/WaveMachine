@@ -3,7 +3,7 @@ from .Controller import Controller
 
 def main():
     controller = Controller()
-    controller.manual_control()
+    controller.calibrate_servo(1, 0)
 
 # test comment 3
 
