@@ -19,7 +19,7 @@ class Controller:
         self.theoretical_position = [0] * 100
         self.real_position = [0] * 100
         self.last_time = [0] * 100
-        self.calibration: interp1d = None
+        self.calibration: interp1d = [None]*100
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(limit_switch_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # limit switch pin
         GPIO.setup(encoder_pin, GPIO.IN, pull_up_down=GPIO.PUD_UP)  # encoder pin
@@ -27,22 +27,15 @@ class Controller:
 
     def set_pin_speed(self, pinx: int, piny: int, speed_mms: float) -> float:
         pin_num = Controller._get_pin_num(pinx, piny)
-        '''
-        if pin_num in self.calibration:
-            servo_calib = self.calibration[pin_num]
-            if speed_mms in servo_calib:
-                on_time = servo_calib[speed_mms]
-            else:
-                pass
-            '''
-        on_time = speed_mms
+        on_time = self.calibration[pin_num](speed_mms)
         return self._set_pin_pwm(pin_num, on_time)
 
     def zero(self, pinx: int, piny: int) -> float:
-        self.set_pin_speed(pinx, piny, -min_on_time)
+        pin_num = Controller._get_pin_num(pinx, piny)
+        self._set_pin_pwm(pin_num, -min_on_time)
         while Controller._poll_limit_switch(pinx, piny):
-            time.sleep(0.001)
-        return self.set_pin_speed(pinx, piny, 0)
+            self._set_pin_pwm(pin_num, -min_on_time)
+        return self._set_pin_pwm(pin_num, 0)
 
     def manual_control(self):
         while True:
@@ -51,7 +44,6 @@ class Controller:
             try:
                 while True:
                     self.set_pin_speed(1, 0, speed)
-                    time.sleep(0.025)
             except KeyboardInterrupt:
                 pass
 
@@ -74,8 +66,8 @@ class Controller:
             rotation_time = self._time_encoder_ticks(pin_num, on_time, rotation_count * 4) # good average even with "large" update_period
             xdata[i] = sign(on_time)*7*pi*rotation_count/rotation_time
         xdata = sorted(xdata) # this should put all the speeds in the correct order for ydata as defined above
-        print(xdata)
-        return interp1d(xdata, ydata, assume_sorted=True)
+        self.calibration[pin_num] = interp1d(xdata, ydata, assume_sorted=True)
+        return
 
 
     def _find_servo_neutral(self, pin_num: int) -> int:
