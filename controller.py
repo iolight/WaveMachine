@@ -1,5 +1,5 @@
 '''
-This is a good module full of good code
+This is a good module full of good code.
 '''
 import time
 from typing import List
@@ -53,12 +53,14 @@ class Controller:
 
     def set_pin_speed(self, pinx: int, piny: int, speed_mms: float) -> float:
         'Sets the speed of the servo on pinx, piny to the given speed in mm/s.'
+        Controller._set_mux(pinx, piny)
         pin_num = Controller._get_pin_num(pinx, piny)
         on_time = self.c_data.calibration[pin_num](speed_mms)
         return self._set_pin_pwm(pin_num, on_time)
 
     def zero(self, pinx: int, piny: int) -> float:
-        'Runs the servo until the upper limit switch is triggered'
+        'Runs the servo until the upper limit switch is triggered.'
+        Controller._set_mux(pinx, piny)
         pin_num = Controller._get_pin_num(pinx, piny)
         self._set_pin_pwm(pin_num, -MIN_ON_TIME)
         while Controller._poll_limit_switch():
@@ -67,7 +69,10 @@ class Controller:
         return self._set_pin_pwm(pin_num, 0)
 
     def manual_control(self):
-        'Allows the user to manually input speeds in mm/s on the command line.'
+        '''Allows the user to manually input speeds in mm/s on the command line.
+        Ctrl-c in terminal to stop and input the next speed.
+        SIGINT? More like "thank you, next."
+        This is a bad function.'''
         while True:
             self.set_pin_speed(1, 0, 0)
             speed = int(input("Input Speed in mm/s: "))

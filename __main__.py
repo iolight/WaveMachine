@@ -1,9 +1,9 @@
-'A module for use with one _very_ specific piece of hardware'
+'A module for use with one _very_ specific piece of hardware.'
 from .controller import Controller
 
 
 def main():
-    'Creates a `Controller` and does stuff'
+    'Creates a `Controller` and does stuff.'
     try:
         controller = Controller()
         controller.calibrate_servo(1, 0)
