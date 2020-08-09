@@ -127,7 +127,7 @@ class Controller:
             pass
         sync_time = time.time()
 
-        board_num, channel_num = Controller._get_board_and_channel(pin_num)
+        _board_num, channel_num = Controller._get_board_and_channel(pin_num)
         self.c_data.theoretical_position[pin_num] \
             += self.c_data.last_theoretical_on_time[pin_num] \
             * (sync_time - self.c_data.last_time[pin_num])
