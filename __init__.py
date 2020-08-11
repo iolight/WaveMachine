@@ -1,1 +1,2 @@
-from .Controller import Controller
+'Initializes the good code.'
+from .controller import Controller

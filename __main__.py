@@ -1,16 +1,18 @@
 'A module for use with one _very_ specific piece of hardware.'
+import RPi.GPIO as GPIO
 from .controller import Controller
 
 
 def main():
     'Creates a `Controller` and does stuff.'
-    try:
-        controller = Controller()
-        controller.calibrate_servo(1, 0)
-        controller.manual_control()
-    finally:
-        controller.set_pin_speed(1, 0, 0)
-
+    #try:
+    controller = Controller()
+    controller.calibrate_servo(0, 0, True)
+    controller.finish()
+    controller.manual_control()
+    GPIO.cleanup()
+    #finally:
+    #    controller.stop_all()
 # test comment 3
 
 
