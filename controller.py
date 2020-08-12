@@ -19,16 +19,10 @@ from .utils.sign import sign
 
 MIN_ON_TIME = 50
 LIMIT_SWITCH_PIN = 14
-ENCODER_PIN = 14 #15
+ENCODER_PIN = 15
 UPDATE_PERIOD = 1/30  # frequency
 MUX_CHANNEL_PINS = [23, 22, 27, 17]
 MUX_BOARD_PINS = [26, 16, 6, 5]
-
-'''
-functionional differences:
-zero function manually sets pin
-encoder pin set to limit switch pin
-'''
 
 
 @dataclass
@@ -48,8 +42,8 @@ class Controller:
     'Handles everything related to the motor controllers, setup, sensors, and calibration.'
 
     def __init__(self):
-        with open('wave_machine/data.pkl', 'rb') as f:
-            temp_neutral, temp_calibration = pickle.load(f)
+        with open('wave_machine/data.pkl', 'rb') as data_file:
+            temp_neutral, temp_calibration = pickle.load(data_file)
         self.c_data = CData(
             neutral=temp_neutral,
             calibration=temp_calibration,
@@ -77,13 +71,12 @@ class Controller:
 
     def zero(self, pinx: int, piny: int) -> float:
         'Runs the servo until the upper limit switch is triggered.'
-        Controller._set_mux(2, 0)
+        Controller._set_mux(pinx, piny)
         pin_num = Controller._get_pin_num(pinx, piny)
         self._set_pin_pwm(pin_num, -MIN_ON_TIME)
         while Controller._poll_limit_switch():
             self._set_pin_pwm(pin_num, -MIN_ON_TIME)
         print("zeroed")
-        Controller._set_mux(pinx, piny)
         return self._set_pin_pwm(pin_num, 0)
 
     def manual_control(self):
@@ -93,7 +86,7 @@ class Controller:
         This is a bad function.'''
         while True:
             self.set_pin_speed(0, 0, 0)
-            speed = int(input("Input Speed in mm/s: "))
+            speed = float(input("Input Speed in mm/s: "))
             try:
                 while True:
                     self.set_pin_speed(0, 0, speed)
@@ -103,8 +96,8 @@ class Controller:
     def finish(self):
         'A simple halt function to guarantee that every servo is fully stopped'
         self.controller.set_all_pwm(0, 0)
-        with open('wave_machine/data.pkl', 'wb') as f:  # Python 3: open(..., 'wb')
-            pickle.dump([self.c_data.neutral, self.c_data.calibration], f)
+        with open('wave_machine/data.pkl', 'wb') as data_file:  # Python 3: open(..., 'wb')
+            pickle.dump([self.c_data.neutral, self.c_data.calibration], data_file)
 
     def calibrate_servo(self, pinx: int, piny: int, recalibrate: bool = False):
         '''Generates an interpolation curve for the servo pinx,piny
@@ -113,7 +106,7 @@ class Controller:
 
         if recalibrate or self.c_data.calibration[pin_num] is None:
 
-            ydata = range(-100, 101, 10)
+            ydata = range(-150, 151, 10)
             xdata = [0]*len(ydata)
             # puts the on times in descending order with alternating positive and negative
             on_time_order = sorted(ydata, key=abs)[::-1]
@@ -165,7 +158,8 @@ class Controller:
         self.c_data.real_on_time_sum[pin_num] += self.c_data.last_real_on_time[pin_num] * (
             sync_time - self.c_data.last_time[pin_num])
         if abs(on_time_us) < MIN_ON_TIME and on_time_us != 0:
-            if (self.c_data.real_on_time_sum[pin_num] < self.c_data.theoretical_on_time_sum[pin_num])\
+            if (self.c_data.real_on_time_sum[pin_num] \
+                    < self.c_data.theoretical_on_time_sum[pin_num]) \
                     ^ (on_time_us < 0):
                 duration = MIN_ON_TIME * sign(on_time_us)
                 self.c_data.last_real_on_time[pin_num] = duration
@@ -177,12 +171,8 @@ class Controller:
             self.c_data.last_real_on_time[pin_num] = on_time_us
         self.c_data.last_theoretical_on_time[pin_num] = on_time_us
         self.c_data.last_time[pin_num] = sync_time
-        if duration == 0:
-            self.controller.set_pwm(
-                channel_num, 0, 0)
-        else:
-            self.controller.set_pwm(
-                channel_num, 0, self.c_data.neutral[pin_num] + duration)
+        self.controller.set_pwm(
+            channel_num, 0, self.c_data.neutral[pin_num] + duration)
         return time.time()
 
     def _time_encoder_ticks(self, pin_num: int, on_time: int, tick_goal: int) -> float:
