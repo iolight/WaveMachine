@@ -4,9 +4,7 @@ This is a good module full of good code written by good people who gooded.
 
 #TODO:  implement error correction using encoder
 #       track locational offset
-#       separate on_time positions from physical positions
 #       multithread the i2c call
-#       test drifting
 
 import time
 import pickle
@@ -39,7 +37,6 @@ class CData:
     calibration: List[interp1d]
     encoder_offset: List[float] # units: mm
     last_time: List[float]
-    last_time_speed: List[float]
     last_theoretical_on_time: List[float]
     last_real_on_time: List[float]
     theoretical_on_time_sum: List[float]
@@ -82,7 +79,7 @@ class Controller:
         '''Uses a proportional controller to align the bead position with what it is declared as.
         Has a max speed of 25 mm/s'''
         pin_num = Controller._get_pin_num(pinx, piny)
-        print(position, self.c_data.physical_position[pin_num])
+        print(str(round(position)).ljust(4,' '), round(self.c_data.physical_position[pin_num]))
         speed_mms = max(min((position - self.c_data.physical_position[pin_num]) \
             * K_P, MAX_SPEED_MMS), -MAX_SPEED_MMS)
         self.set_pin_speed(pinx, piny, speed_mms)
@@ -94,6 +91,10 @@ class Controller:
         on_time = int(self.c_data.calibration[pin_num](speed_mms).round())
         self.c_data.last_speed[pin_num] = speed_mms
         return self._set_pin_pwm(pin_num, on_time)
+
+#       self.c_data.physical_position[pin_num] \
+#       += self.c_data.last_speed[pin_num] * (time.time() - self.c_data.last_time_speed[pin_num])
+#       self.c_data.last_time_speed[pin_num] = time.time()
 
     def zero(self, pinx: int, piny: int):
         'Runs the servo until the upper limit switch is triggered.'
@@ -205,9 +206,11 @@ class Controller:
             self.c_data.encoder_ticks[pin_num] = 0
 
         if GPIO.input(ENCODER_PIN) != self.c_data.last_encoder_reading[pin_num]:
+            self.c_data.last_encoder_reading[pin_num] \
+                = not self.c_data.last_encoder_reading[pin_num]
             self.c_data.encoder_ticks[pin_num] \
                 += sign(self.c_data.last_theoretical_on_time[pin_num])
-            self.c_data.physical_position \
+            self.c_data.physical_position[pin_num] \
                 = self.c_data.encoder_ticks[pin_num] * SERVO_CIRC/4 \
                 + self.c_data.encoder_offset[pin_num]
 

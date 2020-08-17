@@ -39,7 +39,7 @@ class WaveGenerator:
             y_amplitude * sin(y_wave_number*y + y_omega*t)
 
         run_time = time.time()
-        while time.time() - run_time < 60:
+        while time.time() - run_time < 240:
             for piny in range(Y_RANGE):
                 for pinx in range(X_RANGE):
                     time_0 = time.time()
