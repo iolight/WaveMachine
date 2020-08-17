@@ -21,6 +21,7 @@ from .utils.sign import sign
 MIN_ON_TIME = 50
 K_P = 1
 MAX_SPEED_MMS = 25
+SERVO_CIRC = 7*pi # circumfrence in mm
 
 LIMIT_SWITCH_PIN = 14
 ENCODER_PIN = 15
@@ -37,14 +38,16 @@ class CData:
     neutral: List[int]
     calibration: List[interp1d]
     encoder_offset: List[float] # units: mm
-    last_time_pwm: List[float]
+    last_time: List[float]
     last_time_speed: List[float]
     last_theoretical_on_time: List[float]
     last_real_on_time: List[float]
     theoretical_on_time_sum: List[float]
     real_on_time_sum: List[float]
     last_speed: List[float]
+    last_encoder_reading: List[bool]
     physical_position: List[float] # units: mm
+    encoder_ticks: List[bool]
 
 
 class Controller:
@@ -56,14 +59,15 @@ class Controller:
         self.c_data = CData(
             neutral=temp_neutral,
             calibration=temp_calibration,
-            encoder_offset=[0] * 100,
-            last_time_pwm=[0] * 100,
-            last_time_speed=[0] * 100, # potentially could be combined with last_time_pwm
+            encoder_offset=temp_offset,
+            last_time=[0] * 100,
             last_theoretical_on_time=[0] * 100,
             last_real_on_time=[0] * 100,
             theoretical_on_time_sum=[0] * 100,
             real_on_time_sum=[0] * 100,
             last_speed=[0] * 100,
+            last_encoder_reading=[0] * 100,
+            encoder_ticks=[0] * 100,
             physical_position=[0] * 100)
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LIMIT_SWITCH_PIN, GPIO.IN,
@@ -80,17 +84,13 @@ class Controller:
         pin_num = Controller._get_pin_num(pinx, piny)
         print(position, self.c_data.physical_position[pin_num])
         speed_mms = max(min((position - self.c_data.physical_position[pin_num]) \
-            * K_P, MAX_SPEED_MMS),-MAX_SPEED_MMS)
+            * K_P, MAX_SPEED_MMS), -MAX_SPEED_MMS)
         self.set_pin_speed(pinx, piny, speed_mms)
-
 
     def set_pin_speed(self, pinx: int, piny: int, speed_mms: float) -> float:
         'Sets the speed of the servo on pinx, piny to the given speed in mm/s.'
         Controller._set_mux(pinx, piny)
         pin_num = Controller._get_pin_num(pinx, piny)
-        self.c_data.physical_position[pin_num] \
-            += self.c_data.last_speed[pin_num] * (time.time() - self.c_data.last_time_speed[pin_num])
-        self.c_data.last_time_speed[pin_num] = time.time()
         on_time = int(self.c_data.calibration[pin_num](speed_mms).round())
         self.c_data.last_speed[pin_num] = speed_mms
         return self._set_pin_pwm(pin_num, on_time)
@@ -104,7 +104,9 @@ class Controller:
             self._set_pin_pwm(pin_num, -MIN_ON_TIME)
         print("zeroed")
         self._set_pin_pwm(pin_num, 0)
-        self.c_data.physical_position = [0] * 100
+        self.c_data.physical_position[pin_num] = 0
+        self.c_data.last_encoder_reading[pin_num] = GPIO.input(ENCODER_PIN)
+        self.c_data.encoder_ticks[pin_num] = 0
 
     def manual_control(self, pinx: int, piny: int):
         '''Allows the user to manually input speeds in mm/s on the command line.
@@ -121,6 +123,7 @@ class Controller:
                 pass
 
     def stop_all(self):
+        'Stops all servos.'
         self.controller.set_all_pwm(0, 0)
 
     def finish(self):
@@ -155,7 +158,7 @@ class Controller:
                 # good average even with "large" update_period
                 rotation_time = self._time_encoder_ticks(
                     pin_num, on_time, rotation_count * 4)
-                xdata[i] = sign(on_time)*7*pi*rotation_count/rotation_time
+                xdata[i] = sign(on_time)*SERVO_CIRC*rotation_count/rotation_time
             # this should put all the speeds in the correct order for ydata as defined above
             xdata = sorted(xdata)
             self.c_data.calibration[pin_num] = interp1d(
@@ -192,20 +195,28 @@ class Controller:
             = (time_1 - time_0) * finding_speed
 
     def _set_pin_pwm(self, pin_num: int, on_time_us: int) -> float:
-        while time.time() - self.c_data.last_time_pwm[pin_num] < UPDATE_PERIOD:
-            pass
+        while time.time() - self.c_data.last_time[pin_num] < UPDATE_PERIOD:
+            pass # waits for the 30 Hz signal to sync up
         sync_time = time.time()
 
         if not GPIO.input(LIMIT_SWITCH_PIN) and on_time_us < 0:
             # prevents from running into the top
             on_time_us = 0
+            self.c_data.encoder_ticks[pin_num] = 0
+
+        if GPIO.input(ENCODER_PIN) != self.c_data.last_encoder_reading[pin_num]:
+            self.c_data.encoder_ticks[pin_num] \
+                += sign(self.c_data.last_theoretical_on_time[pin_num])
+            self.c_data.physical_position \
+                = self.c_data.encoder_ticks[pin_num] * SERVO_CIRC/4 \
+                + self.c_data.encoder_offset[pin_num]
 
         _board_num, channel_num = Controller._get_board_and_channel(pin_num)
         self.c_data.theoretical_on_time_sum[pin_num] \
             += self.c_data.last_theoretical_on_time[pin_num] \
-            * (sync_time - self.c_data.last_time_pwm[pin_num])
+            * (sync_time - self.c_data.last_time[pin_num])
         self.c_data.real_on_time_sum[pin_num] += self.c_data.last_real_on_time[pin_num] * (
-            sync_time - self.c_data.last_time_pwm[pin_num])
+            sync_time - self.c_data.last_time[pin_num])
         if abs(on_time_us) < MIN_ON_TIME and on_time_us != 0:
             if (self.c_data.real_on_time_sum[pin_num] \
                     < self.c_data.theoretical_on_time_sum[pin_num]) \
@@ -219,7 +230,7 @@ class Controller:
             duration = on_time_us
             self.c_data.last_real_on_time[pin_num] = on_time_us
         self.c_data.last_theoretical_on_time[pin_num] = on_time_us
-        self.c_data.last_time_pwm[pin_num] = sync_time
+        self.c_data.last_time[pin_num] = sync_time
         self.controller.set_pwm(
             channel_num, 0, self.c_data.neutral[pin_num] + duration)
         return time.time()

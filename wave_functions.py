@@ -40,7 +40,6 @@ class WaveGenerator:
 
         run_time = time.time()
         while time.time() - run_time < 60:
-            print('a')
             for piny in range(Y_RANGE):
                 for pinx in range(X_RANGE):
                     time_0 = time.time()
