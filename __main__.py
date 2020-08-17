@@ -7,9 +7,9 @@ def main():
     'Creates a `Controller` and does stuff.'
     #try:
     controller = Controller()
-    controller.calibrate_servo(0, 0, True)
+    controller.calibrate_servo(0, 0, False)
     controller.finish()
-    controller.manual_control()
+    controller.manual_control(0,0)
     GPIO.cleanup()
     #finally:
     #    controller.stop_all()

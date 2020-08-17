@@ -6,6 +6,7 @@ This is a good module full of good code written by good people who gooded.
 #       track locational offset
 #       separate on_time positions from physical positions
 #       multithread the i2c call
+#       test drifting
 
 import time
 import pickle
@@ -79,18 +80,18 @@ class Controller:
         print("zeroed")
         return self._set_pin_pwm(pin_num, 0)
 
-    def manual_control(self):
+    def manual_control(self, pinx: int, piny: int):
         '''Allows the user to manually input speeds in mm/s on the command line.
         Ctrl-c in terminal to stop and input the next speed.
         SIGINT? More like "thank you, next."
         This is a bad function.'''
         while True:
-            self.set_pin_speed(0, 0, 0)
+            self.set_pin_speed(pinx, piny, 0)
             speed = float(input("Input Speed in mm/s: "))
             try:
                 while True:
-                    self.set_pin_speed(0, 0, speed)
-            except KeyboardInterrupt:
+                    self.set_pin_speed(pinx, piny, speed)
+            except KeyboardInterrupt: # this is the bad
                 pass
 
     def finish(self):
@@ -98,6 +99,7 @@ class Controller:
         self.controller.set_all_pwm(0, 0)
         with open('wave_machine/data.pkl', 'wb') as data_file:  # Python 3: open(..., 'wb')
             pickle.dump([self.c_data.neutral, self.c_data.calibration], data_file)
+        
 
     def calibrate_servo(self, pinx: int, piny: int, recalibrate: bool = False):
         '''Generates an interpolation curve for the servo pinx,piny
@@ -150,6 +152,9 @@ class Controller:
         while time.time() - self.c_data.last_time[pin_num] < UPDATE_PERIOD:
             pass
         sync_time = time.time()
+
+        if not self._poll_limit_switch() and on_time_us < 0: # prevents from running into the top
+            on_time_us = 0
 
         _board_num, channel_num = Controller._get_board_and_channel(pin_num)
         self.c_data.theoretical_on_time_sum[pin_num] \
