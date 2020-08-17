@@ -19,11 +19,16 @@ from scipy.interpolate import interp1d
 from .utils.sign import sign
 
 MIN_ON_TIME = 50
+K_P = 1
+MAX_SPEED_MMS = 25
+
 LIMIT_SWITCH_PIN = 14
 ENCODER_PIN = 15
-UPDATE_PERIOD = 1/30  # frequency
 MUX_CHANNEL_PINS = [23, 22, 27, 17]
 MUX_BOARD_PINS = [26, 16, 6, 5]
+
+UPDATE_PERIOD = 1/30  # frequency
+
 
 
 @dataclass
@@ -31,11 +36,14 @@ class CData:
     'Pure dataclass for tracking and calibrating the servos.'
     neutral: List[int]
     calibration: List[interp1d]
-    last_time: List[float]
+    encoder_offset: List[float] # units: mm
+    last_time_pwm: List[float]
+    last_time_speed: List[float]
     last_theoretical_on_time: List[float]
     last_real_on_time: List[float]
     theoretical_on_time_sum: List[float]
     real_on_time_sum: List[float]
+    last_speed: List[float]
     physical_position: List[float] # units: mm
 
 
@@ -44,41 +52,59 @@ class Controller:
 
     def __init__(self):
         with open('wave_machine/data.pkl', 'rb') as data_file:
-            temp_neutral, temp_calibration = pickle.load(data_file)
+            temp_neutral, temp_calibration, temp_offset = pickle.load(data_file)
         self.c_data = CData(
             neutral=temp_neutral,
             calibration=temp_calibration,
-            last_time=[0] * 100,
+            encoder_offset=[0] * 100,
+            last_time_pwm=[0] * 100,
+            last_time_speed=[0] * 100, # potentially could be combined with last_time_pwm
             last_theoretical_on_time=[0] * 100,
             last_real_on_time=[0] * 100,
             theoretical_on_time_sum=[0] * 100,
             real_on_time_sum=[0] * 100,
+            last_speed=[0] * 100,
             physical_position=[0] * 100)
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LIMIT_SWITCH_PIN, GPIO.IN,
-                   pull_up_down=GPIO.PUD_UP)    # limit switch pin
+                   pull_up_down=GPIO.PUD_UP)    # limit switch
         GPIO.setup(ENCODER_PIN, GPIO.IN,
-                   pull_up_down=GPIO.PUD_UP)    # encoder pin
+                   pull_up_down=GPIO.PUD_UP)    # encoder
         for pin in MUX_BOARD_PINS + MUX_CHANNEL_PINS:
             GPIO.setup(pin, GPIO.OUT)
         self.controller = Adafruit_PCA9685.PCA9685(address=0x40)
+
+    def set_pin_position(self, pinx: float, piny: float, position: float):
+        '''Uses a proportional controller to align the bead position with what it is declared as.
+        Has a max speed of 25 mm/s'''
+        pin_num = Controller._get_pin_num(pinx, piny)
+        print(position, self.c_data.physical_position[pin_num])
+        speed_mms = max(min((position - self.c_data.physical_position[pin_num]) \
+            * K_P, MAX_SPEED_MMS),-MAX_SPEED_MMS)
+        self.set_pin_speed(pinx, piny, speed_mms)
+
 
     def set_pin_speed(self, pinx: int, piny: int, speed_mms: float) -> float:
         'Sets the speed of the servo on pinx, piny to the given speed in mm/s.'
         Controller._set_mux(pinx, piny)
         pin_num = Controller._get_pin_num(pinx, piny)
+        self.c_data.physical_position[pin_num] \
+            += self.c_data.last_speed[pin_num] * (time.time() - self.c_data.last_time_speed[pin_num])
+        self.c_data.last_time_speed[pin_num] = time.time()
         on_time = int(self.c_data.calibration[pin_num](speed_mms).round())
+        self.c_data.last_speed[pin_num] = speed_mms
         return self._set_pin_pwm(pin_num, on_time)
 
-    def zero(self, pinx: int, piny: int) -> float:
+    def zero(self, pinx: int, piny: int):
         'Runs the servo until the upper limit switch is triggered.'
         Controller._set_mux(pinx, piny)
         pin_num = Controller._get_pin_num(pinx, piny)
         self._set_pin_pwm(pin_num, -MIN_ON_TIME)
-        while Controller._poll_limit_switch():
+        while GPIO.input(LIMIT_SWITCH_PIN):
             self._set_pin_pwm(pin_num, -MIN_ON_TIME)
         print("zeroed")
-        return self._set_pin_pwm(pin_num, 0)
+        self._set_pin_pwm(pin_num, 0)
+        self.c_data.physical_position = [0] * 100
 
     def manual_control(self, pinx: int, piny: int):
         '''Allows the user to manually input speeds in mm/s on the command line.
@@ -94,17 +120,20 @@ class Controller:
             except KeyboardInterrupt: # this is the bad
                 pass
 
+    def stop_all(self):
+        self.controller.set_all_pwm(0, 0)
+
     def finish(self):
         'A simple halt function to guarantee that every servo is fully stopped'
-        self.controller.set_all_pwm(0, 0)
-        with open('wave_machine/data.pkl', 'wb') as data_file:  # Python 3: open(..., 'wb')
-            pickle.dump([self.c_data.neutral, self.c_data.calibration], data_file)
-        
+        with open('wave_machine/data.pkl', 'wb') as data_file:
+            pickle.dump([self.c_data.neutral, self.c_data.calibration, \
+                self.c_data.encoder_offset], data_file)
 
     def calibrate_servo(self, pinx: int, piny: int, recalibrate: bool = False):
         '''Generates an interpolation curve for the servo pinx,piny
         in order to translate speeds in mm/s to pwm timings for servos.'''
         pin_num = self._get_pin_num(pinx, piny)
+        Controller._set_mux(pinx, piny)
 
         if recalibrate or self.c_data.calibration[pin_num] is None:
 
@@ -132,6 +161,8 @@ class Controller:
             self.c_data.calibration[pin_num] = interp1d(
                 xdata, ydata, assume_sorted=True)
             self.zero(pinx, piny)
+            self._find_encoder_offset(pinx, piny)
+            self.zero(pinx, piny)
 
     def _find_servo_neutral(self, pin_num: int):
         # Runs the servo backwards and forwards while adjusting the neutral
@@ -148,20 +179,33 @@ class Controller:
                 self.c_data.neutral[pin_num] -= 1
         print("Neutral = {}".format(self.c_data.neutral[pin_num]))
 
+    def _find_encoder_offset(self, pinx: int, piny: int):
+        # this is the offset before the first triggering of the encoder
+        current_encoder_reading = GPIO.input(ENCODER_PIN)
+        finding_speed = 1
+        time_0 = self.set_pin_speed(pinx, piny, finding_speed)
+        while GPIO.input(ENCODER_PIN) == current_encoder_reading:
+            self.set_pin_speed(pinx, piny, finding_speed)
+        time_1 = time.time()
+        self.set_pin_speed(pinx, piny, 0)
+        self.c_data.encoder_offset[Controller._get_pin_num(pinx, piny)] \
+            = (time_1 - time_0) * finding_speed
+
     def _set_pin_pwm(self, pin_num: int, on_time_us: int) -> float:
-        while time.time() - self.c_data.last_time[pin_num] < UPDATE_PERIOD:
+        while time.time() - self.c_data.last_time_pwm[pin_num] < UPDATE_PERIOD:
             pass
         sync_time = time.time()
 
-        if not self._poll_limit_switch() and on_time_us < 0: # prevents from running into the top
+        if not GPIO.input(LIMIT_SWITCH_PIN) and on_time_us < 0:
+            # prevents from running into the top
             on_time_us = 0
 
         _board_num, channel_num = Controller._get_board_and_channel(pin_num)
         self.c_data.theoretical_on_time_sum[pin_num] \
             += self.c_data.last_theoretical_on_time[pin_num] \
-            * (sync_time - self.c_data.last_time[pin_num])
+            * (sync_time - self.c_data.last_time_pwm[pin_num])
         self.c_data.real_on_time_sum[pin_num] += self.c_data.last_real_on_time[pin_num] * (
-            sync_time - self.c_data.last_time[pin_num])
+            sync_time - self.c_data.last_time_pwm[pin_num])
         if abs(on_time_us) < MIN_ON_TIME and on_time_us != 0:
             if (self.c_data.real_on_time_sum[pin_num] \
                     < self.c_data.theoretical_on_time_sum[pin_num]) \
@@ -175,7 +219,7 @@ class Controller:
             duration = on_time_us
             self.c_data.last_real_on_time[pin_num] = on_time_us
         self.c_data.last_theoretical_on_time[pin_num] = on_time_us
-        self.c_data.last_time[pin_num] = sync_time
+        self.c_data.last_time_pwm[pin_num] = sync_time
         self.controller.set_pwm(
             channel_num, 0, self.c_data.neutral[pin_num] + duration)
         return time.time()
@@ -223,7 +267,3 @@ class Controller:
     @staticmethod
     def _get_pin_num(pinx: int, piny: int) -> int:
         return piny * 10 + pinx
-
-    @staticmethod
-    def _poll_limit_switch() -> bool:
-        return GPIO.input(LIMIT_SWITCH_PIN)
