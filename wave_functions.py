@@ -6,9 +6,9 @@ from math import sin, pi
 from .controller import Controller
 
 BEAD_TO_MM = 1
-VERTICAL_OFFSET = 100
+VERTICAL_OFFSET = 200
 Y_RANGE = 1
-X_RANGE = 2
+X_RANGE = 4
 
 
 
@@ -18,11 +18,17 @@ class WaveGenerator:
     def __init__(self):
         self.controller = Controller()
         self.controller.stop_all()
+    
+    def zero(self):
         for piny in range(Y_RANGE):
             for pinx in range(X_RANGE):
                 self.controller.zero(pinx, piny)
-        self.controller.calibrate_servo(0, 0, False)
-        self.controller.calibrate_servo(1, 0, False)
+
+    def calibrate(self):
+        self.controller.calibrate_servo(0, 0, True)
+        self.controller.calibrate_servo(1, 0, True)
+        self.controller.calibrate_servo(2, 0, True)
+        self.controller.calibrate_servo(3, 0, True)
 
     def sine_wave(self, x_velocity: int, y_velocity: int, \
             x_wavelength: int, y_wavelength: int, \
@@ -39,7 +45,7 @@ class WaveGenerator:
             y_amplitude * sin(y_wave_number*y + y_omega*t)
 
         run_time = time.time()
-        while time.time() - run_time < 240:
+        while time.time() - run_time < 60:
             for piny in range(Y_RANGE):
                 for pinx in range(X_RANGE):
                     time_0 = time.time()
@@ -47,4 +53,8 @@ class WaveGenerator:
                         x_wave(pinx * BEAD_TO_MM, time_0) \
                             + y_wave(piny * BEAD_TO_MM, time_0) + VERTICAL_OFFSET)
         self.controller.stop_all()
+        self.controller.finish()
+    
+    def finish(self):
+        "Calls the controller's finish command by proxy"
         self.controller.finish()

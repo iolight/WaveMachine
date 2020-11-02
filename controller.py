@@ -2,11 +2,11 @@
 This is a good module full of good code written by good people who gooded.
 '''
 
-#TODO:  implement error correction using encoder
+# todo:
 #       track locational offset
 #       multithread the i2c call
 
-import time
+from time import time, sleep
 import pickle
 from typing import List, Tuple
 from math import pi
@@ -21,10 +21,10 @@ K_P = 1
 MAX_SPEED_MMS = 25
 SERVO_CIRC = 7*pi # circumfrence in mm
 
-LIMIT_SWITCH_PIN = 14
-ENCODER_PIN = 15
-MUX_CHANNEL_PINS = [23, 22, 27, 17]
-MUX_BOARD_PINS = [26, 16, 6, 5]
+LIMIT_SWITCH_PIN = 15
+ENCODER_PIN = 14
+MUX_CHANNEL_PINS = [17, 27, 22, 23] # [23, 22, 27, 17]
+MUX_BOARD_PINS = [5, 6, 16, 26] # [26, 16, 6, 5]
 
 UPDATE_PERIOD = 1/30  # frequency
 
@@ -66,6 +66,7 @@ class Controller:
             last_encoder_reading=[0] * 100,
             encoder_ticks=[0] * 100,
             physical_position=[0] * 100)
+        print(self.c_data.neutral)
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LIMIT_SWITCH_PIN, GPIO.IN,
                    pull_up_down=GPIO.PUD_UP)    # limit switch
@@ -93,16 +94,17 @@ class Controller:
         return self._set_pin_pwm(pin_num, on_time)
 
 #       self.c_data.physical_position[pin_num] \
-#       += self.c_data.last_speed[pin_num] * (time.time() - self.c_data.last_time_speed[pin_num])
-#       self.c_data.last_time_speed[pin_num] = time.time()
+#       += self.c_data.last_speed[pin_num] * (time() - self.c_data.last_time_speed[pin_num])
+#       self.c_data.last_time_speed[pin_num] = time()
 
     def zero(self, pinx: int, piny: int):
         'Runs the servo until the upper limit switch is triggered.'
+        print("Zeroing {}, {}".format(pinx, piny))
         Controller._set_mux(pinx, piny)
         pin_num = Controller._get_pin_num(pinx, piny)
-        self._set_pin_pwm(pin_num, -MIN_ON_TIME)
+        self._set_pin_pwm(pin_num, -MIN_ON_TIME*4)
         while GPIO.input(LIMIT_SWITCH_PIN):
-            self._set_pin_pwm(pin_num, -MIN_ON_TIME)
+            self._set_pin_pwm(pin_num, -MIN_ON_TIME*4)
         print("zeroed")
         self._set_pin_pwm(pin_num, 0)
         self.c_data.physical_position[pin_num] = 0
@@ -129,6 +131,8 @@ class Controller:
 
     def finish(self):
         'A simple halt function to guarantee that every servo is fully stopped'
+        self.stop_all()
+        GPIO.cleanup()
         with open('wave_machine/data.pkl', 'wb') as data_file:
             pickle.dump([self.c_data.neutral, self.c_data.calibration, \
                 self.c_data.encoder_offset], data_file)
@@ -147,8 +151,7 @@ class Controller:
             on_time_order = sorted(ydata, key=abs)[::-1]
 
             self.zero(pinx, piny)
-            self._set_pin_pwm(pin_num, MIN_ON_TIME)
-            time.sleep(2)
+            self._time_encoder_ticks(pin_num, 200, 20)
             self._find_servo_neutral(pin_num)
 
             rotation_count = 4  # distance to average speed over
@@ -172,9 +175,19 @@ class Controller:
         # Runs the servo backwards and forwards while adjusting the neutral
         # of the servo in order to match their speeds
         while True:
+            if self._time_encoder_ticks(pin_num, 0, tick_goal=1, timeout=1, override=True):
+                drift_direction = input("Did that go (u)p or (d)own?")
+                if drift_direction == 'u':
+                    self.c_data.neutral[pin_num] += 30
+                elif drift_direction == 'd':
+                    self.c_data.neutral[pin_num] -= 30
+            else:
+                break
+
+        while True:
             time_0 = self._time_encoder_ticks(pin_num, MIN_ON_TIME, 4)
             time_1 = self._time_encoder_ticks(pin_num, -MIN_ON_TIME, 4)
-            time.sleep(0.1)
+            sleep(0.1)
             if abs(time_0-time_1) < UPDATE_PERIOD*1.2:
                 break
             elif time_1 < time_0:
@@ -190,18 +203,20 @@ class Controller:
         time_0 = self.set_pin_speed(pinx, piny, finding_speed)
         while GPIO.input(ENCODER_PIN) == current_encoder_reading:
             self.set_pin_speed(pinx, piny, finding_speed)
-        time_1 = time.time()
+        time_1 = time()
         self.set_pin_speed(pinx, piny, 0)
         self.c_data.encoder_offset[Controller._get_pin_num(pinx, piny)] \
             = (time_1 - time_0) * finding_speed
 
-    def _set_pin_pwm(self, pin_num: int, on_time_us: int) -> float:
-        while time.time() - self.c_data.last_time[pin_num] < UPDATE_PERIOD:
+    def _set_pin_pwm(self, pin_num: int, on_time_us: int, override: bool = False) -> float:
+        print(on_time_us)
+        while time() - self.c_data.last_time[pin_num] < UPDATE_PERIOD:
             pass # waits for the 30 Hz signal to sync up
-        sync_time = time.time()
+        sync_time = time()
 
         if not GPIO.input(LIMIT_SWITCH_PIN) and on_time_us < 0:
             # prevents from running into the top
+            print("Hit top")
             on_time_us = 0
             self.c_data.encoder_ticks[pin_num] = 0
 
@@ -234,31 +249,37 @@ class Controller:
             self.c_data.last_real_on_time[pin_num] = on_time_us
         self.c_data.last_theoretical_on_time[pin_num] = on_time_us
         self.c_data.last_time[pin_num] = sync_time
-        self.controller.set_pwm(
-            channel_num, 0, self.c_data.neutral[pin_num] + duration)
-        return time.time()
+        if on_time_us == 0 and not override:
+            self.controller.set_pwm(channel_num, 0, 0)
+        else:
+            self.controller.set_pwm(
+                channel_num, 0, self.c_data.neutral[pin_num] + duration)
+        return time()
 
-    def _time_encoder_ticks(self, pin_num: int, on_time: int, tick_goal: int) -> float:
+    def _time_encoder_ticks(self, pin_num: int, on_time: int, tick_goal: int, timeout: int = 10, override = False) -> float:
         # Runs for a certain number of encoder ticks
         # Starts timing at the first tick it sees. Timing is only accurate to update_period
         encoder_ticks = 0
         current_encoder_reading = GPIO.input(ENCODER_PIN)
-        self._set_pin_pwm(pin_num, on_time)
+        self._set_pin_pwm(pin_num, on_time, override)
+        stuck_time_start = time()
         while GPIO.input(ENCODER_PIN) == current_encoder_reading:
-            self._set_pin_pwm(pin_num, on_time)  # frequncy update rate (30 Hz)
+            self._set_pin_pwm(pin_num, on_time, override)  # frequncy update rate (30 Hz)
+            if time() - stuck_time_start > timeout:
+                return False
         current_encoder_reading = not current_encoder_reading
-        time_0 = time.time()
+        time_0 = time()
         while encoder_ticks < tick_goal:
             if GPIO.input(ENCODER_PIN) != current_encoder_reading:
                 current_encoder_reading = not current_encoder_reading
                 encoder_ticks += 1
-            self._set_pin_pwm(pin_num, on_time)
-        time_1 = time.time()
+            self._set_pin_pwm(pin_num, on_time, override)
+        time_1 = time()
         # allows the servo to overshoot, so it has room to accelerate for the next timing
-        while time.time() - time_1 < UPDATE_PERIOD*2:
-            self._set_pin_pwm(pin_num, on_time)
+        while time() - time_1 < UPDATE_PERIOD*2:
+            self._set_pin_pwm(pin_num, on_time, override)
         self._set_pin_pwm(pin_num, 0)
-        time.sleep(0.1)
+        sleep(0.1)
         return time_1 - time_0
 
     @staticmethod
