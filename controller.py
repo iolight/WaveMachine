@@ -80,7 +80,7 @@ class Controller:
         '''Uses a proportional controller to align the bead position with what it is declared as.
         Has a max speed of 25 mm/s'''
         pin_num = Controller._get_pin_num(pinx, piny)
-        print(str(round(position)).ljust(4,' '), round(self.c_data.physical_position[pin_num]))
+        print(str(round(position)).ljust(4, ' '), round(self.c_data.physical_position[pin_num]))
         speed_mms = max(min((position - self.c_data.physical_position[pin_num]) \
             * K_P, MAX_SPEED_MMS), -MAX_SPEED_MMS)
         self.set_pin_speed(pinx, piny, speed_mms)
@@ -256,7 +256,8 @@ class Controller:
                 channel_num, 0, self.c_data.neutral[pin_num] + duration)
         return time()
 
-    def _time_encoder_ticks(self, pin_num: int, on_time: int, tick_goal: int, timeout: int = 10, override = False) -> float:
+    def _time_encoder_ticks(self, pin_num: int, on_time: int, tick_goal: int, \
+        timeout: int = 10, override: bool = False) -> float:
         # Runs for a certain number of encoder ticks
         # Starts timing at the first tick it sees. Timing is only accurate to update_period
         encoder_ticks = 0

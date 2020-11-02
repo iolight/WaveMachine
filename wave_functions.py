@@ -18,13 +18,15 @@ class WaveGenerator:
     def __init__(self):
         self.controller = Controller()
         self.controller.stop_all()
-    
+
     def zero(self):
+        'Zeroes out every bead'
         for piny in range(Y_RANGE):
             for pinx in range(X_RANGE):
                 self.controller.zero(pinx, piny)
 
     def calibrate(self):
+        'Calibrates a select set of beads'
         self.controller.calibrate_servo(0, 0, True)
         self.controller.calibrate_servo(1, 0, True)
         self.controller.calibrate_servo(2, 0, True)
@@ -54,7 +56,7 @@ class WaveGenerator:
                             + y_wave(piny * BEAD_TO_MM, time_0) + VERTICAL_OFFSET)
         self.controller.stop_all()
         self.controller.finish()
-    
+
     def finish(self):
         "Calls the controller's finish command by proxy"
         self.controller.finish()

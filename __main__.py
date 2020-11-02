@@ -1,5 +1,5 @@
 'A module for use with one _very_ specific piece of hardware.'
-from .controller import Controller
+#from .controller import Controller
 from .wave_functions import WaveGenerator
 
 
