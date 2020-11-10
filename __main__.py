@@ -9,7 +9,7 @@ def main():
     try:
         wave.zero()
         #wave.calibrate()
-        wave.sine_wave(2, 0, 10, 1, 40, 0)
+        wave.sine_wave(80, 0, 1000, 1, 40, 0)
     finally:
         wave.finish()
         print("all done")

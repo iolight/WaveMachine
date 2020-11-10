@@ -3,8 +3,8 @@ This is a good module full of good code written by good people who gooded.
 '''
 
 # todo:
-#       track locational offset
 #       multithread the i2c call
+#       debounce the positional offset
 
 from time import time, sleep
 import pickle
@@ -41,8 +41,10 @@ class CData:
     last_real_on_time: List[float]
     theoretical_on_time_sum: List[float]
     real_on_time_sum: List[float]
-    last_speed: List[float]
+    last_speed: List[float] # units: mm/s
     last_encoder_reading: List[bool]
+    last_encoder_flip_direction: List[int]
+    last_encoder_flip_time: List[float]
     physical_position: List[float] # units: mm
     encoder_ticks: List[bool]
 
@@ -64,9 +66,10 @@ class Controller:
             real_on_time_sum=[0] * 100,
             last_speed=[0] * 100,
             last_encoder_reading=[0] * 100,
+            last_encoder_flip_direction=[1] * 100,
+            last_encoder_flip_time=[0] * 100,
             encoder_ticks=[0] * 100,
             physical_position=[0] * 100)
-        print(self.c_data.neutral)
         GPIO.setmode(GPIO.BCM)
         GPIO.setup(LIMIT_SWITCH_PIN, GPIO.IN,
                    pull_up_down=GPIO.PUD_UP)    # limit switch
@@ -110,6 +113,21 @@ class Controller:
         self.c_data.physical_position[pin_num] = 0
         self.c_data.last_encoder_reading[pin_num] = GPIO.input(ENCODER_PIN)
         self.c_data.encoder_ticks[pin_num] = 0
+
+    def zero_all(self, x_range: int, y_range: int):
+        'Zeroes out every bead'
+        zero_finished = False
+        while not zero_finished:
+            zero_finished = True
+            for piny in range(y_range):
+                for pinx in range(x_range):
+                    self.set_pin_speed(pinx, piny, -15)
+                    if GPIO.input(LIMIT_SWITCH_PIN):
+                        zero_finished = False
+        
+        for piny in range(y_range):
+            for pinx in range(x_range):
+                self.zero(pinx, piny)
 
     def manual_control(self, pinx: int, piny: int):
         '''Allows the user to manually input speeds in mm/s on the command line.
@@ -209,25 +227,35 @@ class Controller:
             = (time_1 - time_0) * finding_speed
 
     def _set_pin_pwm(self, pin_num: int, on_time_us: int, override: bool = False) -> float:
-        print(on_time_us)
+        print(pin_num, self.c_data.physical_position[pin_num])
         while time() - self.c_data.last_time[pin_num] < UPDATE_PERIOD:
             pass # waits for the 30 Hz signal to sync up
         sync_time = time()
 
         if not GPIO.input(LIMIT_SWITCH_PIN) and on_time_us < 0:
             # prevents from running into the top
-            print("Hit top")
+            print("Bead {} hit top".format(pin_num))
             on_time_us = 0
             self.c_data.encoder_ticks[pin_num] = 0
 
         if GPIO.input(ENCODER_PIN) != self.c_data.last_encoder_reading[pin_num]:
-            self.c_data.last_encoder_reading[pin_num] \
-                = not self.c_data.last_encoder_reading[pin_num]
-            self.c_data.encoder_ticks[pin_num] \
-                += sign(self.c_data.last_theoretical_on_time[pin_num])
+            if sync_time - self.c_data.last_encoder_flip_time[pin_num] < 0.125:
+                current_direction = -self.c_data.last_encoder_flip_direction[pin_num]
+            else:
+                current_direction = sign(self.c_data.last_theoretical_on_time[pin_num])
+
+            if current_direction == self.c_data.last_encoder_flip_direction[pin_num]:
+                self.c_data.encoder_ticks[pin_num] += current_direction
             self.c_data.physical_position[pin_num] \
                 = self.c_data.encoder_ticks[pin_num] * SERVO_CIRC/4 \
                 + self.c_data.encoder_offset[pin_num]
+
+            self.c_data.last_encoder_reading[pin_num] = not self.c_data.last_encoder_reading[pin_num]
+            self.c_data.last_encoder_flip_direction[pin_num] = current_direction
+            self.c_data.last_encoder_flip_time[pin_num] = sync_time
+        else:
+            #print("pin {} last speed: {}".format(pin_num, self.c_data.last_speed[pin_num]))
+            self.c_data.physical_position[pin_num] += self.c_data.last_speed[pin_num] * UPDATE_PERIOD
 
         _board_num, channel_num = Controller._get_board_and_channel(pin_num)
         self.c_data.theoretical_on_time_sum[pin_num] \
